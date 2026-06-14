@@ -1,22 +1,21 @@
 import { useState, useEffect } from 'react';
 import { useParams, useNavigate, useLocation } from 'react-router-dom';
-import { ChevronLeft, Send, CheckSquare, WifiOff } from 'lucide-react';
+import { ChevronLeft, Send, CheckSquare, WifiOff, Loader2, AlertCircle, RefreshCw } from 'lucide-react';
 import StudentListTile from '../components/StudentListTile';
 import SuccessModal from '../components/SuccessModal';
 import ConfirmModal from '../components/ConfirmModal';
-
-// Dummy student data
-const dummyStudents = [
-  { id: '1', number: 1, name: 'Ahmad Budi' },
-  { id: '2', number: 2, name: 'Siti Nurhaliza' },
-  { id: '3', number: 3, name: 'Bambang Pamungkas Putra Pratama yang Sangat Panjang Sekali Namanya' },
-  { id: '4', number: 4, name: 'Rina Nose' },
-];
+import { fetchStudents, submitAttendance } from '../api/googleSheets';
 
 function AttendancePage() {
   const { classId } = useParams();
   const location = useLocation();
   const navigate = useNavigate();
+  
+  const [students, setStudents] = useState([]);
+  const [isLoadingStudents, setIsLoadingStudents] = useState(true);
+  const [studentError, setStudentError] = useState(null);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  
   const [attendance, setAttendance] = useState({});
   const [showModal, setShowModal] = useState(false);
   const [showConfirmModal, setShowConfirmModal] = useState(false);
@@ -30,7 +29,33 @@ function AttendancePage() {
   };
 
   useEffect(() => {
-    // Load existing attendance from localStorage if already submitted today
+    const loadStudentData = async () => {
+      if (!classData.sheetId) {
+        setStudentError('ID Spreadsheet Kelas belum disetel di Master. Hubungi admin.');
+        setIsLoadingStudents(false);
+        return;
+      }
+      try {
+        setIsLoadingStudents(true);
+        const fetchedStudents = await fetchStudents(classData.sheetId);
+        // Map data agar kompatibel dengan props StudentListTile
+        const mappedStudents = fetchedStudents.map(s => ({
+          id: s.no_absen,
+          number: s.no_absen,
+          name: s.name
+        }));
+        setStudents(mappedStudents);
+        setStudentError(null);
+      } catch (error) {
+        setStudentError('Gagal memuat data siswa. Pastikan internet aktif.');
+      } finally {
+        setIsLoadingStudents(false);
+      }
+    };
+    
+    loadStudentData();
+
+    // Load existing attendance from localStorage
     const today = new Date().toLocaleDateString('id-ID');
     const savedData = JSON.parse(localStorage.getItem('absensiData') || '{}');
     if (savedData[classData.id] && savedData[classData.id].date === today) {
@@ -46,7 +71,7 @@ function AttendancePage() {
       window.removeEventListener('online', handleOnline);
       window.removeEventListener('offline', handleOffline);
     };
-  }, [classData.id]);
+  }, [classData.id, classData.sheetId]);
 
   const handleStatusChange = (studentId, status) => {
     setAttendance(prev => ({
@@ -57,8 +82,8 @@ function AttendancePage() {
 
   const handleMarkAllPresent = () => {
     const allHadir = {};
-    dummyStudents.forEach(student => {
-      allHadir[student.id] = 'hadir';
+    students.forEach(student => {
+      allHadir[student.id] = 'hadir'; // Komponen StudentListTile mengecek 'hadir', 'sakit', dll. Wait! StudentListTile mengeksekusi ini.
     });
     setAttendance(allHadir);
   };
@@ -71,24 +96,78 @@ function AttendancePage() {
     setIsSubmittedToday(true);
   };
 
-  const handleSubmit = () => {
-    if (Object.keys(attendance).length < dummyStudents.length) {
+  const handleSubmit = async () => {
+    if (Object.keys(attendance).length < students.length) {
       alert('Harap lengkapi absensi untuk seluruh murid terlebih dahulu!');
       return;
     }
     
-    if (isSubmittedToday) {
-      setShowConfirmModal(true);
+    // Kirim data ke API jika sedang online
+    if (!isOffline) {
+      try {
+        setIsSubmitting(true);
+        // Format array payload (Konversi dari status huruf kecil ke inisial huruf kapital)
+        const formatStatus = (s) => {
+          if (s === 'hadir') return 'H';
+          if (s === 'sakit') return 'S';
+          if (s === 'izin') return 'I';
+          if (s === 'alpha') return 'A';
+          return 'H'; // Default fallback
+        };
+
+        const payloadArray = students.map(s => ({
+          no_absen: s.number,
+          status: formatStatus(attendance[s.id] || 'hadir')
+        }));
+        await submitAttendance(classData.sheetId, payloadArray);
+        // Jika sukses kirim ke Sheets, simpan ke lokal juga
+        doSaveToLocal();
+        setShowModal(true);
+      } catch (error) {
+        alert("Gagal menyimpan ke server: " + error.message);
+      } finally {
+        setIsSubmitting(false);
+      }
+    } else {
+      // Jika offline
+      if (isSubmittedToday) {
+        setShowConfirmModal(true);
+      } else {
+        doSaveToLocal();
+        setShowModal(true);
+      }
+    }
+  };
+
+  const handleConfirmUpdate = async () => {
+    setShowConfirmModal(false);
+    if (!isOffline) {
+      try {
+        setIsSubmitting(true);
+        const formatStatus = (s) => {
+          if (s === 'hadir') return 'H';
+          if (s === 'sakit') return 'S';
+          if (s === 'izin') return 'I';
+          if (s === 'alpha') return 'A';
+          return 'H';
+        };
+
+        const payloadArray = students.map(s => ({
+          no_absen: s.number,
+          status: formatStatus(attendance[s.id] || 'hadir')
+        }));
+        await submitAttendance(classData.sheetId, payloadArray);
+        doSaveToLocal();
+        setShowModal(true);
+      } catch (error) {
+        alert("Gagal mengupdate ke server: " + error.message);
+      } finally {
+        setIsSubmitting(false);
+      }
     } else {
       doSaveToLocal();
       setShowModal(true);
     }
-  };
-
-  const handleConfirmUpdate = () => {
-    doSaveToLocal();
-    setShowConfirmModal(false);
-    setShowModal(true);
   };
 
   let statusText = "";
@@ -124,7 +203,7 @@ function AttendancePage() {
             <p className="stat-label" style={{ color: 'white' }}>Sudah Absen</p>
           </div>
           <div className="stat-card" style={{ background: 'rgba(255,255,255,0.2)', border: '1px solid rgba(255,255,255,0.3)', boxShadow: 'none' }}>
-            <h3 className="stat-num">{dummyStudents.length - Object.keys(attendance).length}</h3>
+            <h3 className="stat-num">{students.length - Object.keys(attendance).length}</h3>
             <p className="stat-label" style={{ color: 'white' }}>Belum Absen</p>
           </div>
       </div>
@@ -136,20 +215,45 @@ function AttendancePage() {
       </div>
 
       <div className="student-list" style={{marginBottom: '80px'}}>
-        {dummyStudents.map((student, index) => (
-          <div key={student.id} className="animate-fade-in-up" style={{ animationDelay: `${0.1 + index * 0.05}s` }}>
-            <StudentListTile 
-              student={student} 
-              status={attendance[student.id]}
-              onStatusChange={(status) => handleStatusChange(student.id, status)}
-            />
+        {isLoadingStudents ? (
+          <div style={{ textAlign: 'center', padding: '40px 20px', color: 'white' }}>
+            <Loader2 size={32} className="spin" style={{ margin: '0 auto 16px auto', opacity: 0.8 }} />
+            <h3 style={{ margin: '0 0 8px 0' }}>Menarik Daftar Siswa</h3>
+            <p style={{ margin: 0, opacity: 0.8, fontSize: '0.95rem' }}>Berkomunikasi dengan Google Sheets...</p>
           </div>
-        ))}
+        ) : studentError ? (
+          <div style={{ textAlign: 'center', padding: '40px 20px', color: 'white', background: 'rgba(255,0,0,0.2)', borderRadius: '16px', border: '1px solid rgba(255,255,255,0.2)' }}>
+            <AlertCircle size={32} style={{ opacity: 0.8, margin: '0 auto 16px auto' }} />
+            <h3 style={{ margin: '0 0 8px 0' }}>Gagal Memuat</h3>
+            <p style={{ margin: 0, opacity: 0.9, fontSize: '0.95rem' }}>{studentError}</p>
+          </div>
+        ) : (
+          students.map((student, index) => (
+            <div key={student.id} className="animate-fade-in-up" style={{ animationDelay: `${0.1 + index * 0.05}s` }}>
+              <StudentListTile 
+                student={student} 
+                status={attendance[student.id]}
+                onStatusChange={(status) => handleStatusChange(student.id, status)}
+              />
+            </div>
+          ))
+        )}
       </div>
 
       <div className="bottom-bar" style={{ background: 'rgba(255,255,255,0.15)', borderTopColor: 'rgba(255,255,255,0.2)' }}>
-        <button className="btn-primary" onClick={handleSubmit} style={{ background: 'white', color: 'var(--text-main)' }}>
-          <Send size={20} /> {isSubmittedToday ? 'Update Perubahan' : 'Submit Kehadiran'}
+        <button 
+          className="btn-primary" 
+          onClick={handleSubmit} 
+          disabled={isLoadingStudents || students.length === 0 || isSubmitting}
+          style={{ background: 'white', color: 'var(--text-main)' }}
+        >
+          {isSubmitting ? (
+            <span style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'center', width: '100%' }}><RefreshCw size={20} className="spin" /> Menyimpan...</span>
+          ) : isSubmittedToday ? (
+            <span style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'center', width: '100%' }}><Send size={20} /> Update Perubahan</span>
+          ) : (
+            <span style={{ display: 'flex', alignItems: 'center', gap: '8px', justifyContent: 'center', width: '100%' }}><Send size={20} /> Submit Kehadiran</span>
+          )}
         </button>
       </div>
       

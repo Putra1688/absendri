@@ -1,6 +1,7 @@
+import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
-import { ChevronLeft } from 'lucide-react';
-import { dummyClasses } from '../data/dummyData';
+import { ChevronLeft, Loader2, AlertTriangle } from 'lucide-react';
+import { fetchMasterData } from '../api/googleSheets';
 
 const hours = [
   { id: 1, label: 'JAM 1', time: '7:00 - 7:45' },
@@ -15,16 +16,35 @@ const hours = [
   { id: 10, label: 'JAM 10', time: '14:30 - 15:15' },
 ];
 
-const weekdays = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat'];
+const weekdays = ['Senin', 'Selasa', 'Rabu', 'Kamis', 'Jumat', 'Sabtu'];
 
 function SchedulePage() {
   const navigate = useNavigate();
+  const [classes, setClasses] = useState([]);
+  const [isLoading, setIsLoading] = useState(true);
+  const [errorMsg, setErrorMsg] = useState(null);
+
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        setIsLoading(true);
+        // Bisa ambil dari network atau cache
+        const data = await fetchMasterData();
+        setClasses(data);
+      } catch (err) {
+        setErrorMsg('Gagal memuat jadwal dari server.');
+      } finally {
+        setIsLoading(false);
+      }
+    };
+    loadData();
+  }, []);
 
   const getDayCells = (day) => {
     let cells = [];
     let currentHour = 1;
     while (currentHour <= 10) {
-      const cls = dummyClasses.find(c => c.schedule.some(s => s.day === day && s.start === currentHour));
+      const cls = classes.find(c => c.schedule && c.schedule.some(s => s.day === day && s.start === currentHour));
       if (cls) {
         const schedule = cls.schedule.find(s => s.day === day && s.start === currentHour);
         const span = schedule.end - schedule.start + 1;
@@ -53,41 +73,55 @@ function SchedulePage() {
       </div>
 
       <div style={{ padding: '0 20px 80px 20px' }}>
-        <div className="schedule-wrapper animate-fade-in-up">
-          <table className="schedule-table">
-            <thead>
-              <tr>
-                <th className="sticky-col">Hari</th>
-                {hours.map(h => (
-                  <th key={h.id}>
-                    <div className="jam-label">{h.label}</div>
-                    <div className="jam-time">{h.time}</div>
-                  </th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {weekdays.map(day => (
-                <tr key={day}>
-                  <td className="sticky-col day-label">{day}</td>
-                  {getDayCells(day).map(cell => {
-                    if (cell.type === 'empty') {
-                      return <td key={cell.id}></td>;
-                    } else {
-                      return (
-                        <td key={cell.id} colSpan={cell.span} className="class-cell-container">
-                          <div className="class-cell" style={{ background: cell.data.color }}>
-                            <div className="class-name">{cell.data.name}</div>
-                          </div>
-                        </td>
-                      );
-                    }
-                  })}
+        {isLoading ? (
+          <div className="glass-card animate-fade-in-up" style={{ textAlign: 'center', padding: '40px 20px' }}>
+            <Loader2 size={32} color="var(--primary-color)" className="spin" style={{ margin: '0 auto 16px auto' }} />
+            <h3 style={{ margin: '0 0 8px 0', color: 'var(--text-main)' }}>Sinkronisasi Jadwal</h3>
+            <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.95rem' }}>Mengambil data terbaru...</p>
+          </div>
+        ) : errorMsg && classes.length === 0 ? (
+          <div className="glass-card animate-fade-in-up" style={{ textAlign: 'center', padding: '40px 20px', borderLeft: '4px solid var(--status-sakit)' }}>
+            <AlertTriangle size={32} color="var(--status-sakit)" style={{ opacity: 0.8, marginBottom: '16px' }} />
+            <h3 style={{ margin: '0 0 8px 0', color: 'var(--text-main)' }}>Koneksi Gagal</h3>
+            <p style={{ margin: 0, color: 'var(--text-muted)', fontSize: '0.95rem' }}>{errorMsg}</p>
+          </div>
+        ) : (
+          <div className="schedule-wrapper animate-fade-in-up">
+            <table className="schedule-table">
+              <thead>
+                <tr>
+                  <th className="sticky-col">Hari</th>
+                  {hours.map(h => (
+                    <th key={h.id}>
+                      <div className="jam-label">{h.label}</div>
+                      <div className="jam-time">{h.time}</div>
+                    </th>
+                  ))}
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody>
+                {weekdays.map(day => (
+                  <tr key={day}>
+                    <td className="sticky-col day-label">{day}</td>
+                    {getDayCells(day).map(cell => {
+                      if (cell.type === 'empty') {
+                        return <td key={cell.id}></td>;
+                      } else {
+                        return (
+                          <td key={cell.id} colSpan={cell.span} className="class-cell-container">
+                            <div className="class-cell" style={{ background: cell.data.color }}>
+                              <div className="class-name">{cell.data.name}</div>
+                            </div>
+                          </td>
+                        );
+                      }
+                    })}
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
       </div>
     </div>
   );
